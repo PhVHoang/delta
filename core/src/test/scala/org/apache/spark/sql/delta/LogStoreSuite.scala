@@ -382,3 +382,8 @@ class PublicHDFSLogStoreSuite extends PublicLogStoreSuite {
   override protected val publicLogStoreClassName: String =
     classOf[io.delta.storage.HDFSLogStore].getName
 }
+
+class PublicLocalLogStoreSuite extends PublicLogStoreSuite {
+  override protected val publicLogStoreClassName: String =
+    classOf[io.delta.storage.LocalLogStore].getName
+}
