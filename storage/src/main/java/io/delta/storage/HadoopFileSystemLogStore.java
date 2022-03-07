@@ -24,10 +24,8 @@ import java.util.Iterator;
 import java.util.UUID;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.*;
 
 /**
  * Default implementation of {@link LogStore} for Hadoop {@link FileSystem} implementations.
@@ -76,5 +74,67 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
             path.getParent(),
             String.format(".%s.%s.tmp", path.getName(), UUID.randomUUID())
         );
+    }
+
+    /**
+     * An internal write implementation that uses FileSystem.rename()
+     *
+     * This implementation should only be used for the underlying file systems that support atomic
+     * renames, e.g, Azure is OK but HDFS is not.
+
+     */
+    protected void writeWithRename(
+            Path path, Iterator<String> actions, boolean overwrite, Configuration hadoopConf
+    ) throws IOException {
+        FileSystem fs = path.getFileSystem(hadoopConf);
+
+        if (!fs.exists(path.getParent())) {
+            throw new FileNotFoundException(
+                    String.format("No such file or directory: %s", path.getParent())
+            );
+        }
+
+        if (overwrite) {
+            try (FSDataOutputStream stream = fs.create(path, true)) {
+                while (actions.hasNext()) {
+                    stream.write((actions.next() + "\n").getBytes(StandardCharsets.UTF_8));
+                }
+            }
+        } else {
+            if (fs.exists(path)) {
+                throw new FileAlreadyExistsException(path.toString());
+            }
+
+            Path tempPath = createTempPath(path);
+            FSDataOutputStream stream = fs.create(tempPath);
+            boolean renameDone = false;
+            boolean streamClosed = false;
+
+            try {
+                while (actions.hasNext()) {
+                    stream.write((actions.next() + "\n").getBytes(StandardCharsets.UTF_8));
+                }
+
+                stream.close();
+                streamClosed = true;
+
+                if (fs.rename(tempPath, path)) {
+                    renameDone = true;
+                } else {
+                    if (fs.exists(path)) {
+                        throw new FileAlreadyExistsException(path.toString());
+                    } else {
+                        throw new IllegalStateException(String.format("Cannot rename %s to %s", tempPath, path));
+                    }
+                }
+            } finally {
+                if (!streamClosed) {
+                    stream.close();
+                }
+                if (!renameDone) {
+                    fs.delete(tempPath, false);
+                }
+            }
+        }
     }
 }
