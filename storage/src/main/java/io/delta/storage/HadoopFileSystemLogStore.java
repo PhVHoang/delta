@@ -95,10 +95,13 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
         }
 
         if (overwrite) {
-            try (FSDataOutputStream stream = fs.create(path, true)) {
+            final FSDataOutputStream stream = fs.create(path, true);
+            try {
                 while (actions.hasNext()) {
                     stream.write((actions.next() + "\n").getBytes(StandardCharsets.UTF_8));
                 }
+            } finally {
+                stream.close();
             }
         } else {
             if (fs.exists(path)) {
@@ -106,7 +109,7 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
             }
 
             Path tempPath = createTempPath(path);
-            FSDataOutputStream stream = fs.create(tempPath);
+            final FSDataOutputStream stream = fs.create(tempPath);
             boolean renameDone = false;
             boolean streamClosed = false;
 
