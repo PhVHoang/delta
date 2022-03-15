@@ -18,12 +18,16 @@ package io.delta.storage;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.UUID;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.*;
 
@@ -67,25 +71,16 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
     }
 
     /**
-     * Create a temporary path (to be used as a copy) for the input {@code path}
-     */
-    protected Path createTempPath(Path path) {
-        return new Path(
-            path.getParent(),
-            String.format(".%s.%s.tmp", path.getName(), UUID.randomUUID())
-        );
-    }
-
-    /**
-     * An internal write implementation that uses FileSystem.rename()
-     *
+     * An internal write implementation that uses FileSystem.rename().
+     * <p>
      * This implementation should only be used for the underlying file systems that support atomic
-     * renames, e.g, Azure is OK but HDFS is not.
-
+     * renames, e.g., Azure is OK but HDFS is not.
      */
     protected void writeWithRename(
-            Path path, Iterator<String> actions, boolean overwrite, Configuration hadoopConf
-    ) throws IOException {
+            Path path,
+            Iterator<String> actions,
+            Boolean overwrite,
+            Configuration hadoopConf) throws IOException {
         FileSystem fs = path.getFileSystem(hadoopConf);
 
         if (!fs.exists(path.getParent())) {
@@ -93,7 +88,6 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
                     String.format("No such file or directory: %s", path.getParent())
             );
         }
-
         if (overwrite) {
             final FSDataOutputStream stream = fs.create(path, true);
             try {
@@ -107,28 +101,30 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
             if (fs.exists(path)) {
                 throw new FileAlreadyExistsException(path.toString());
             }
-
             Path tempPath = createTempPath(path);
+            boolean streamClosed = false; // This flag is to avoid double close
+            boolean renameDone = false; // This flag is to save the delete operation in most cases
             final FSDataOutputStream stream = fs.create(tempPath);
-            boolean renameDone = false;
-            boolean streamClosed = false;
-
             try {
                 while (actions.hasNext()) {
                     stream.write((actions.next() + "\n").getBytes(StandardCharsets.UTF_8));
                 }
-
                 stream.close();
                 streamClosed = true;
-
-                if (fs.rename(tempPath, path)) {
-                    renameDone = true;
-                } else {
-                    if (fs.exists(path)) {
-                        throw new FileAlreadyExistsException(path.toString());
+                try {
+                    if (fs.rename(tempPath, path)) {
+                        renameDone = true;
                     } else {
-                        throw new IllegalStateException(String.format("Cannot rename %s to %s", tempPath, path));
+                        if (fs.exists(path)) {
+                            throw new FileAlreadyExistsException(path.toString());
+                        } else {
+                            throw new IllegalStateException(
+                                    String.format("Cannot rename %s to %s", tempPath, path)
+                            );
+                        }
                     }
+                } catch (org.apache.hadoop.fs.FileAlreadyExistsException e) {
+                    throw new FileAlreadyExistsException(path.toString());
                 }
             } finally {
                 if (!streamClosed) {
@@ -139,5 +135,15 @@ public abstract class HadoopFileSystemLogStore extends LogStore {
                 }
             }
         }
+    }
+
+    /**
+     * Create a temporary path (to be used as a copy) for the input {@code path}
+     */
+    protected Path createTempPath(Path path) {
+        return new Path(
+            path.getParent(),
+            String.format(".%s.%s.tmp", path.getName(), UUID.randomUUID())
+        );
     }
 }
